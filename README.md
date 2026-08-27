@@ -9,7 +9,39 @@ Syncs between one **primary** calendar and any number of **child** calendars acr
 
 ## Setup
 
-### 1. Register Azure Apps (one per tenant/account)
+### Prerequisites
+
+- Python 3.10+
+- Azure CLI: `curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash`
+
+### Streamlined setup (recommended)
+
+`setup.py` creates the Azure app registrations for you — no portal clicking.
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+python3 setup.py
+```
+
+It will ask how many child calendars you have, then open a browser sign-in for each account and write your `.env` automatically. After it finishes:
+
+```bash
+python3 sync.py --auth   # one-time consent prompt per account
+python3 sync.py          # verify it works
+```
+
+Then add to cron (see [Scheduling](#scheduling)).
+
+---
+
+### Manual setup (alternative)
+
+If you prefer to create app registrations yourself in the Azure portal:
+
+#### 1. Register Azure Apps (one per tenant/account)
 
 For **each** account (primary + every child):
 
@@ -22,7 +54,7 @@ For **each** account (primary + every child):
 7. **Authentication** → enable **"Allow public client flows"**
    > You don't need to click "Grant admin consent". When you run `--auth`, Microsoft will show a standard consent prompt for your own account — just click Accept. Admin consent is only needed if your IT department has disabled per-user consent for the entire tenant (you'll see an `AADSTS65001` error if so).
 
-### 2. Install dependencies
+#### 2. Install dependencies
 
 ```bash
 python3 -m venv venv
@@ -30,7 +62,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 3. Configure
+#### 3. Configure
 
 ```bash
 cp .env.example .env
@@ -51,16 +83,15 @@ for c in cals['value']: print(c['id'], c['name'])
 "
 ```
 
-### 4. First run (interactive auth — one device-code prompt per account)
+#### 4. Authenticate
 
 ```bash
-source venv/bin/activate
-python3 sync.py
+python3 sync.py --auth   # device-code prompts, once per account
 ```
 
-Tokens are cached after this; no re-auth needed for ~90 days.
+---
 
-### 5. Schedule with cron
+### Scheduling
 
 ```bash
 crontab -e
