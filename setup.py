@@ -53,7 +53,7 @@ def login(label: str) -> str:
 def get_or_create_app(display_name: str) -> tuple[str, str]:
     """
     Return (client_id, tenant_id) for a new or existing app registration.
-    Skips creation if an app with this name already exists.
+    Skips creation if an app named 'CalendarSync' already exists in this tenant.
     """
     existing = az("ad", "app", "list", "--display-name", display_name, "--query", "[0]")
     if existing:
@@ -64,7 +64,7 @@ def get_or_create_app(display_name: str) -> tuple[str, str]:
             "ad", "app", "create",
             "--display-name", display_name,
             "--sign-in-audience", "AzureADMyOrg",
-            "--public-client-redirect-uris", "https://login.microsoftonline.com/common/oauth2/nativeclient",
+            "--public-client-redirect-uris", "http://localhost",
         )
         client_id = app["appId"]
         print(f"  ✓ Created app '{display_name}': {client_id}")
@@ -78,15 +78,13 @@ def get_or_create_app(display_name: str) -> tuple[str, str]:
             "--api", "00000003-0000-0000-c000-000000000000",
             "--api-permissions", "465a38f9-76ea-45b9-9f34-9e8b0d4b0b42=Scope",
         )
+        print(f"  ✓ Calendars.ReadWrite permission added")
 
-        # Enable public client flows (required for device-code auth)
-        az(
-            "ad", "app", "update",
-            "--id", client_id,
-            "--enable-mobile-and-desktop-flows", "true",
-        )
-
-        print(f"  ✓ Calendars.ReadWrite permission added, public client flows enabled")
+    # Always ensure correct redirect URI and public client flows (idempotent)
+    az("ad", "app", "update", "--id", client_id,
+       "--public-client-redirect-uris", "http://localhost",
+       "--set", "isFallbackPublicClient=true")
+    print(f"  ✓ Redirect URI and public client flows confirmed")
 
     tenant_id = current_tenant()
     return client_id, tenant_id
@@ -148,14 +146,14 @@ def main():
     # Primary
     print("\n── Primary calendar ──")
     login("primary")
-    client_id, tenant_id = get_or_create_app("CalendarSync-Primary")
+    client_id, tenant_id = get_or_create_app("CalendarSync")
     entries.append(("PRIMARY_", client_id, tenant_id))
 
     # Children
     for i in range(1, n_children + 1):
         print(f"\n── Child calendar {i} ──")
         login(f"child{i}")
-        client_id, tenant_id = get_or_create_app(f"CalendarSync-Child{i}")
+        client_id, tenant_id = get_or_create_app("CalendarSync")
         entries.append((f"CHILD_{i}_", client_id, tenant_id))
 
     env_path = write_env(entries)
