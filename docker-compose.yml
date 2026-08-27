@@ -1,0 +1,9 @@
+services:
+  calendarsync:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ${TOKEN_CACHE_DIR:-~/.calendar_sync_tokens}:/root/.calendar_sync_tokens
+      - ${STATE_FILE:-~/.calendar_sync_state.json}:/root/.calendar_sync_state.json
+

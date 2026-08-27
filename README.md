@@ -93,6 +93,25 @@ python3 sync.py --auth   # device-code prompts, once per account
 
 ### Scheduling
 
+#### Docker (recommended for servers)
+
+Auth must happen on the host first — the container has no browser:
+
+```bash
+# 1. Authenticate on the host (opens browser per account)
+python3 sync.py --auth
+
+# 2. Start the container — it reads tokens and state directly from the host
+docker compose up -d
+docker compose logs -f
+```
+
+The `.env` file is passed in via `env_file`, and the token cache and state file are bind-mounted from their host paths (defaulting to `~/.calendar_sync_tokens` and `~/.calendar_sync_state.json`, or whatever you set in `.env`).
+
+If tokens ever expire, re-run `python3 sync.py --auth` on the host then `docker compose restart`.
+
+#### Cron (alternative)
+
 ```bash
 crontab -e
 ```
