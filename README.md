@@ -19,8 +19,8 @@ For **each** account (primary + every child):
 4. Redirect URI: leave blank (device code flow)
 5. After creation: note the **Application (client) ID** and **Directory (tenant) ID**
 6. **API permissions** → **Add** → **Microsoft Graph** → **Delegated** → `Calendars.ReadWrite` → **Add**
-7. Click **Grant admin consent** (or ask your admin)
-8. **Authentication** → enable **"Allow public client flows"**
+7. **Authentication** → enable **"Allow public client flows"**
+   > You don't need to click "Grant admin consent". When you run `--auth`, Microsoft will show a standard consent prompt for your own account — just click Accept. Admin consent is only needed if your IT department has disabled per-user consent for the entire tenant (you'll see an `AADSTS65001` error if so).
 
 ### 2. Install dependencies
 
