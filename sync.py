@@ -82,10 +82,9 @@ def _build_msal_app(name: str, cfg: dict):
 
 def _get_token(name: str, cfg: dict, interactive: bool = False) -> str:
     """
-    Return a valid access token. In normal (cron) mode, silent refresh only —
-    exits with an error if the cache is missing or the refresh token has expired,
-    so cron never hangs waiting for a human.
-    Pass interactive=True (via `python3 sync.py --auth`) to do the initial device-code flow.
+    Return a valid access token. In normal (cron) mode, silent refresh only.
+    Interactive mode uses auth-code-with-PKCE via a localhost redirect — this
+    satisfies Conditional Access policies that block device-code flow.
     """
     app, cache, cache_file = _build_msal_app(name, cfg)
 
@@ -98,13 +97,13 @@ def _get_token(name: str, cfg: dict, interactive: bool = False) -> str:
                 f"[{name}] Token missing or expired. Run: python3 sync.py --auth\n"
                 f"  (cache: {cache_file})"
             )
-        print(f"\n[{name}] Open this URL to authenticate:\n")
-        flow = app.initiate_device_flow(scopes=SCOPES)
-        print(flow["message"])
-        result = app.acquire_token_by_device_flow(flow)
+        # Auth-code flow with PKCE: opens browser, catches redirect on localhost.
+        # Satisfies Conditional Access policies that block device-code flow.
+        result = app.acquire_token_interactive(scopes=SCOPES)
 
     if "access_token" not in result:
-        sys.exit(f"[{name}] Auth failed: {result.get('error_description')}")
+        sys.exit(f"[{name}] Auth failed: {result.get('error_description')}"
+                 f"\n  Error: {result.get('error')}")
 
     cache_file.write_text(cache.serialize())
     return result["access_token"]
@@ -160,7 +159,7 @@ def list_events(token: str, cfg: dict) -> list:
     base = calendar_url(cfg)
     url = f"{base}/calendarView"
     params = {
-        "$select": "id,subject,body,start,end,location,isAllDay,showAs,isCancelled,singleValueExtendedProperties",
+        "$select": "id,subject,body,start,end,location,isAllDay,showAs,isCancelled,onlineMeeting,onlineMeetingUrl,singleValueExtendedProperties",
         "$expand": f"singleValueExtendedProperties($filter=id eq '{SYNC_MARKER_NS}')",
         "startDateTime": start,
         "endDateTime": end,
@@ -187,7 +186,11 @@ def is_synced_copy(event: dict) -> str | None:
 
 def event_fingerprint(event: dict, full_details: bool) -> str:
     """Stable hash of fields that matter for this copy type."""
-    data: dict = {"start": event.get("start"), "end": event.get("end")}
+    data: dict = {
+        "start": event.get("start"),
+        "end": event.get("end"),
+        "showAs": event.get("showAs"),  # always tracked — tentative/busy/free matters either way
+    }
     if full_details:
         data["subject"] = event.get("subject")
         data["location"] = (event.get("location") or {}).get("displayName")
@@ -196,13 +199,13 @@ def event_fingerprint(event: dict, full_details: bool) -> str:
 
 
 def _busy_body(event: dict, source_id: str) -> dict:
-    """Minimal 'Busy' block for primary→child direction."""
+    """Time block for primary→child: no details, but real showAs (tentative/busy/free)."""
     return {
         "subject": "Busy",
         "start": event["start"],
         "end": event["end"],
         "isAllDay": event.get("isAllDay", False),
-        "showAs": "busy",
+        "showAs": event.get("showAs", "busy"),
         "singleValueExtendedProperties": [
             {"id": SYNC_MARKER_NS, "value": source_id}
         ],
@@ -211,7 +214,7 @@ def _busy_body(event: dict, source_id: str) -> dict:
 
 def _full_body(event: dict, source_id: str) -> dict:
     """Full event copy for child→primary direction."""
-    return {
+    body = {
         "subject": event.get("subject", "(No title)"),
         "start": event["start"],
         "end": event["end"],
@@ -223,6 +226,10 @@ def _full_body(event: dict, source_id: str) -> dict:
             {"id": SYNC_MARKER_NS, "value": source_id}
         ],
     }
+    # Preserve Teams/online meeting join URL if present
+    if event.get("onlineMeetingUrl"):
+        body["onlineMeetingUrl"] = event["onlineMeetingUrl"]
+    return body
 
 
 def create_copy(token: str, cfg: dict, event: dict, source_id: str, full_details: bool) -> str:
@@ -243,13 +250,15 @@ def update_copy(token: str, event_id: str, event: dict, full_details: bool):
             "body": event.get("body"),
             "location": event.get("location"),
         }
+        if event.get("onlineMeetingUrl"):
+            body["onlineMeetingUrl"] = event["onlineMeetingUrl"]
     else:
         body = {
             "subject": "Busy",
             "start": event["start"],
             "end": event["end"],
             "isAllDay": event.get("isAllDay", False),
-            "showAs": "busy",
+            "showAs": event.get("showAs", "busy"),
         }
     graph_patch(token, f"{GRAPH}/me/events/{event_id}", body)
 
@@ -282,8 +291,10 @@ def sync_direction(src_name: str, dst_name: str, src_token: str, dst_token: str,
     mode = "full" if full_details else "busy-only"
     print(f"\n── {direction} ({mode}) ──")
 
+    print("  Fetching events...", end=" ", flush=True)
     src_events = list_events(src_token, src_cfg)
     dst_events = list_events(dst_token, dst_cfg)
+    print(f"found {len(src_events)} source, {len(dst_events)} destination")
 
     # Build lookup: source_id -> copy in destination
     dst_copies = {is_synced_copy(e): e for e in dst_events if is_synced_copy(e)}
@@ -297,6 +308,10 @@ def sync_direction(src_name: str, dst_name: str, src_token: str, dst_token: str,
         if src_event.get("isCancelled"):
             continue
 
+        title = src_event.get("subject") or "(No title)"
+        start = (src_event.get("start") or {}).get("dateTime", "")[:16].replace("T", " ")
+        label = f'"{title}" ({start})'
+
         fp = event_fingerprint(src_event, full_details)
         state_key = f"{direction}:{src_id}"
         existing = state.get(state_key)
@@ -306,25 +321,28 @@ def sync_direction(src_name: str, dst_name: str, src_token: str, dst_token: str,
             if existing and existing.get("fingerprint") == fp:
                 skipped += 1
                 continue
+            print(f"  ~ updating  {label}")
             update_copy(dst_token, dst_event["id"], src_event, full_details)
             state[state_key] = {"copy_id": dst_event["id"], "fingerprint": fp}
             updated += 1
         else:
             if existing:
                 del state[state_key]
+            print(f"  + creating  {label}")
             copy_id = create_copy(dst_token, dst_cfg, src_event, src_id, full_details)
             state[state_key] = {"copy_id": copy_id, "fingerprint": fp}
             created += 1
 
     # Delete copies whose source has left the sync window
     for key in [k for k in state if k.startswith(f"{direction}:")]:
-        src_id = key.split(":", 2)[2]
+        src_id = key.split(":", 1)[1]
         if src_id not in src_originals:
+            print(f"  - deleting  copy of gone event {src_id[:8]}...")
             delete_event(dst_token, state[key]["copy_id"])
             del state[key]
             deleted += 1
 
-    print(f"  created={created} updated={updated} deleted={deleted} skipped={skipped}")
+    print(f"  ✓ created={created} updated={updated} deleted={deleted} skipped={skipped}")
 
 
 def main():
