@@ -12,7 +12,7 @@ Syncs between one **primary** calendar and any number of **child** calendars acr
 ### Prerequisites
 
 - Python 3.10+
-- Azure CLI: `curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash`
+- Azure CLI (required for `setup.py`'s app registration step; not pip-installable — use the [official installer](https://learn.microsoft.com/cli/azure/install-azure-cli) for your OS): `curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash`
 
 ### Streamlined setup (recommended)
 
