@@ -175,6 +175,75 @@ def list_events(token: str, cfg: dict) -> list:
     return events
 
 
+def list_all_copies(token: str, cfg: dict) -> dict:
+    """
+    Fetch EVERY event we ever marked on this calendar — regardless of the sync
+    window — and group them by marker value (source event ID).
+
+    Why not reuse list_events(dst)? calendarView includes all-day events based
+    on each calendar's own day-boundary interpretation, so a copy can sit just
+    outside the destination window while its source is still inside the source
+    window. The lookup then misses, and every run re-creates the copy — which
+    is exactly how all-day birthdays duplicated (8 copies = 8 runs x 15 min).
+
+    Graph requires a value restriction next to the id match, so pair the id
+    filter with an impossible value comparison (marker values are Graph event
+    IDs and never '~~none~~').
+
+    Returns {marker_value: [event, ...]} — duplicates included.
+    """
+    base = calendar_url(cfg)
+    params = {
+        "$filter": (
+            f"singleValueExtendedProperties/any(ep:ep/id eq '{SYNC_MARKER_NS}' "
+            f"and ep/value ne '~~none~~')"
+        ),
+        "$expand": f"singleValueExtendedProperties($filter=id eq '{SYNC_MARKER_NS}')",
+        "$select": "id,subject,start,end,isAllDay,showAs,isCancelled,createdDateTime",
+        "$top": "200",
+    }
+    events = []
+    url = f"{base}/events"
+    while url:
+        data = graph_get(token, url, params)
+        events.extend(data.get("value", []))
+        url = data.get("@odata.nextLink")
+        params = None
+
+    by_marker: dict = {}
+    for e in events:
+        marker = is_synced_copy(e)
+        if marker:
+            by_marker.setdefault(marker, []).append(e)
+    return by_marker
+
+
+def _dedupe_copies(dst_token: str, by_marker: dict, state: dict,
+                   direction: str) -> tuple[dict, int]:
+    """
+    One copy per source is the invariant. For any marker with extra copies,
+    keep the copy tracked in state (else the newest) and delete the rest.
+    Only ever touches events bearing our own marker.
+    """
+    keepers: dict = {}
+    deduped = 0
+    for marker, copies in by_marker.items():
+        if len(copies) == 1:
+            keepers[marker] = copies[0]
+            continue
+        tracked_id = (state.get(f"{direction}:{marker}") or {}).get("copy_id")
+        keeper = next((c for c in copies if c["id"] == tracked_id), None)
+        if keeper is None:
+            keeper = max(copies, key=lambda c: c.get("createdDateTime") or "")
+        for c in copies:
+            if c["id"] != keeper["id"]:
+                print(f"  ! deduping  extra copy {c['id'][-10:]} of source {marker[-10:]}")
+                delete_event(dst_token, c["id"])
+                deduped += 1
+        keepers[marker] = keeper
+    return keepers, deduped
+
+
 def is_synced_copy(event: dict) -> str | None:
     """Return the source event ID if this event is a copy we created, else None."""
     props = event.get("singleValueExtendedProperties") or []
@@ -293,11 +362,9 @@ def sync_direction(src_name: str, dst_name: str, src_token: str, dst_token: str,
 
     print("  Fetching events...", end=" ", flush=True)
     src_events = list_events(src_token, src_cfg)
-    dst_events = list_events(dst_token, dst_cfg)
-    print(f"found {len(src_events)} source, {len(dst_events)} destination")
-
-    # Build lookup: source_id -> copy in destination
-    dst_copies = {is_synced_copy(e): e for e in dst_events if is_synced_copy(e)}
+    copies_by_marker = list_all_copies(dst_token, dst_cfg)
+    dst_copies, deduped = _dedupe_copies(dst_token, copies_by_marker, state, direction)
+    print(f"found {len(src_events)} source, {len(dst_copies)} copies on destination")
 
     # Originals only — skip copies we received from elsewhere
     src_originals = {e["id"]: e for e in src_events if not is_synced_copy(e)}
@@ -342,7 +409,8 @@ def sync_direction(src_name: str, dst_name: str, src_token: str, dst_token: str,
             del state[key]
             deleted += 1
 
-    print(f"  ✓ created={created} updated={updated} deleted={deleted} skipped={skipped}")
+    print(f"  ✓ created={created} updated={updated} deleted={deleted} "
+          f"deduped={deduped} skipped={skipped}")
 
 
 def main():
