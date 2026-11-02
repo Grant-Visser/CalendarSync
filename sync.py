@@ -16,68 +16,38 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import requests
-from msal import PublicClientApplication
 from dotenv import load_dotenv
+
+from accounts import load_accounts
+from auth import SCOPES, TOKEN_CACHE_DIR, msal_token_cache, _build_msal_app
 
 load_dotenv()
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-SCOPES = ["Calendars.ReadWrite"]
 GRAPH = "https://graph.microsoft.com/v1.0"
 SYNC_WINDOW_DAYS = int(os.getenv("SYNC_WINDOW_DAYS", "30"))
 STATE_FILE = Path(os.getenv("STATE_FILE", "~/.calendar_sync_state.json")).expanduser()
-TOKEN_CACHE_DIR = Path(os.getenv("TOKEN_CACHE_DIR", "~/.calendar_sync_tokens")).expanduser()
 
 # Marker so we never re-sync a copy (extended property)
 SYNC_MARKER_NS = "String {d4e28c00-1234-5678-abcd-ef0123456789} Name SyncedFrom"
 
 
-def _load_accounts() -> tuple[dict, list[dict]]:
-    """
-    Parse PRIMARY_* and CHILD_n_* env vars.
-    Returns (primary_cfg, [child_cfg, ...]).
-    Children are discovered by scanning for CHILD_1_CLIENT_ID, CHILD_2_CLIENT_ID, ...
-    """
-    primary = {
-        "name": "primary",
-        "client_id": os.environ["PRIMARY_CLIENT_ID"],
-        "tenant_id": os.environ["PRIMARY_TENANT_ID"],
-        "calendar_id": os.getenv("PRIMARY_CALENDAR_ID", "primary"),
-    }
-
-    children = []
-    i = 1
-    while os.getenv(f"CHILD_{i}_CLIENT_ID"):
-        children.append({
-            "name": f"child{i}",
-            "client_id": os.environ[f"CHILD_{i}_CLIENT_ID"],
-            "tenant_id": os.environ[f"CHILD_{i}_TENANT_ID"],
-            "calendar_id": os.getenv(f"CHILD_{i}_CALENDAR_ID", "primary"),
-        })
-        i += 1
-
-    if not children:
-        sys.exit("No children configured. Set CHILD_1_CLIENT_ID, CHILD_1_TENANT_ID, etc.")
-
-    return primary, children
+_accounts_cache: tuple[dict, list[dict]] | None = None
 
 
-PRIMARY_CFG, CHILDREN_CFG = _load_accounts()
+def __getattr__(name):
+    """Lazily expose PRIMARY_CFG / CHILDREN_CFG without import-time env parsing,
+    so `from sync import _get_token, PRIMARY_CFG, ...` keeps working."""
+    global _accounts_cache
+    if name in ("PRIMARY_CFG", "CHILDREN_CFG"):
+        if _accounts_cache is None:
+            _accounts_cache = load_accounts()
+        return _accounts_cache[0] if name == "PRIMARY_CFG" else _accounts_cache[1]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
-
-TOKEN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
-def _build_msal_app(name: str, cfg: dict):
-    cache_file = TOKEN_CACHE_DIR / f"{name}.json"
-    cache = msal_token_cache(cache_file)
-    app = PublicClientApplication(
-        cfg["client_id"],
-        authority=f"https://login.microsoftonline.com/{cfg['tenant_id']}",
-        token_cache=cache,
-    )
-    return app, cache, cache_file
 
 
 def _get_token(name: str, cfg: dict, interactive: bool = False) -> str:
@@ -107,14 +77,6 @@ def _get_token(name: str, cfg: dict, interactive: bool = False) -> str:
 
     cache_file.write_text(cache.serialize())
     return result["access_token"]
-
-
-def msal_token_cache(cache_file: Path):
-    from msal import SerializableTokenCache
-    cache = SerializableTokenCache()
-    if cache_file.exists():
-        cache.deserialize(cache_file.read_text())
-    return cache
 
 
 # ── Graph helpers ─────────────────────────────────────────────────────────────

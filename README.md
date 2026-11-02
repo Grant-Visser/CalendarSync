@@ -91,6 +91,69 @@ python3 sync.py --auth   # device-code prompts, once per account
 
 ---
 
+## Web auth UI (recommended for re-auth)
+
+A tiny local web app (`authui.py`, stdlib `http.server` + htmx) that shows a
+per-account token-health card and a **Sign in / Re-auth** button — no SSH +
+`--auth` dance when a Conditional Access policy expires your refresh token.
+
+```bash
+source venv/bin/activate
+python3 authui.py          # binds 0.0.0.0:$WEBAUTH_PORT (default 54231)
+```
+
+Then open either `http://localhost:54231` (direct) or
+`https://calendarsync-auth.orangelabs.home` (via Nginx Proxy Manager;
+LAN/WireGuard only). This is a **single-user, LAN-only tool — never expose it
+publicly**. The OAuth redirect URI is built from the incoming request's Host
+and `X-Forwarded-Proto` headers, so both entry points produce a redirect URI
+Azure will accept (exact string match — register both URIs, see below).
+
+Each card shows one of:
+
+- **Silent OK** — token cache is healthy, cron sync will work
+- **Needs re-auth** — click the button to sign in again
+- **Claims challenge pending** — a Graph 401 claims challenge was persisted
+  (`~/.calendar_sync_claims.json`); signing in via the button satisfies it
+- **Not signed in** — no account in the cache yet
+
+A successful web sign-in writes the same `SerializableTokenCache` files
+`sync.py` uses (`~/.calendar_sync_tokens/<name>.json`), so the next cron run
+works immediately. The cron path (`sync.py` without `--auth`) is untouched.
+
+### Manual Azure portal step (required, once per app)
+
+The app registrations already exist and there is no Azure CLI/portal access
+from this machine, so add the redirect URI by hand in the
+[Azure portal](https://portal.azure.com)
+(**Entra ID / Azure Active Directory → App registrations → <your app> → Authentication**):
+
+1. **Mobile and desktop applications** platform: add
+   `http://localhost:54231/auth/callback`
+   (the port must match `WEBAUTH_PORT` in `.env` exactly — redirect URIs are
+   string-matched, no wildcards)
+2. **Web** platform: add
+   `https://calendarsync-auth.orangelabs.home/auth/callback`
+   (served through Nginx Proxy Manager; LAN/WireGuard only — never expose
+   this publicly. Keep the app **public**: no client secret, PKCE applies.)
+3. Keep the existing desktop `http://localhost` redirect so `sync.py --auth`
+   keeps working — URIs are additive.
+4. Ensure **"Allow public client flows"** stays set to **Yes**
+   (`isFallbackPublicClient=true` in the manifest).
+
+Do this for **each** app registration (primary + every child).
+
+> Note: the web UI uses auth-code + PKCE (`initiate_auth_code_flow`), so no
+> client secret is needed; the apps remain public clients.
+
+### Running it long-term
+
+The UI is only needed when auth is required, so it doesn't have to run all
+the time. If you want it always available on the host (or reachable at the
+NPM hostname), a small systemd user unit or `tmux` session works; cron
+`sync.py` runs are unaffected by the UI being up or down (they never touch
+the HTTP port).
+
 ### Scheduling
 
 #### Docker (recommended for servers)
