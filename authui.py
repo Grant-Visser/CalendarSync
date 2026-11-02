@@ -10,7 +10,7 @@ Run:  venv/bin/python3 authui.py   (port from .env WEBAUTH_PORT, default 54231)
 
 Requires one-time manual Azure steps: add BOTH redirect URIs
   http://localhost:54231/auth/callback   (direct access)
-  https://calendarsync-auth.orangelabs.home/auth/callback   (via NPM proxy)
+  https://calendarsync-auth.home.orangelabs.dev/auth/callback   (via NPM proxy)
 to each app registration (keep http://localhost so `sync.py --auth` works).
 The redirect URI is built per-request from Host / X-Forwarded-Proto headers.
 """
@@ -158,7 +158,7 @@ PAGE = """<!doctype html>
 <p><small>Tokens are written to the same cache files sync.py uses, so cron keeps
 working right after a web sign-in. Azure redirect URIs required (exact match):
 <code>http://localhost:{port}/auth/callback</code> and
-<code>https://calendarsync-auth.orangelabs.home/auth/callback</code>.
+<code>https://calendarsync-auth.home.orangelabs.dev/auth/callback</code>.
 Single-user LAN-only tool — never expose publicly.</small></p>
 </body>
 </html>"""
@@ -262,7 +262,7 @@ class Handler(BaseHTTPRequestHandler):
         """
         Build the OAuth redirect URI from the incoming request so the UI works
         both directly (http://localhost:54231) and behind a reverse proxy
-        (https://calendarsync-auth.orangelabs.home).
+        (https://calendarsync-auth.home.orangelabs.dev).
 
         Azure matches redirect URIs as EXACT strings — the same path is used
         for every scheme/host, only scheme+host vary. Scheme comes from
@@ -289,7 +289,7 @@ def main():
     names = [c["name"] for c in [primary] + children]
     print(f"CalendarSync auth UI — accounts: {', '.join(names)}")
     print(f"Listening on http://0.0.0.0:{WEBAUTH_PORT} (direct: http://localhost:{WEBAUTH_PORT}; "
-          f"or via reverse proxy, e.g. https://calendarsync-auth.orangelabs.home)")
+          f"or via reverse proxy, e.g. https://calendarsync-auth.home.orangelabs.dev)")
     print("LAN-only tool — do not expose publicly.")
     server = ThreadingHTTPServer(("0.0.0.0", WEBAUTH_PORT), Handler)
     try:

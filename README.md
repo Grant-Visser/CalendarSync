@@ -103,7 +103,7 @@ python3 authui.py          # binds 0.0.0.0:$WEBAUTH_PORT (default 54231)
 ```
 
 Then open either `http://localhost:54231` (direct) or
-`https://calendarsync-auth.orangelabs.home` (via Nginx Proxy Manager;
+`https://calendarsync-auth.home.orangelabs.dev` (via Nginx Proxy Manager;
 LAN/WireGuard only). This is a **single-user, LAN-only tool — never expose it
 publicly**. The OAuth redirect URI is built from the incoming request's Host
 and `X-Forwarded-Proto` headers, so both entry points produce a redirect URI
@@ -133,7 +133,7 @@ from this machine, so add the redirect URI by hand in the
    (the port must match `WEBAUTH_PORT` in `.env` exactly — redirect URIs are
    string-matched, no wildcards)
 2. **Web** platform: add
-   `https://calendarsync-auth.orangelabs.home/auth/callback`
+   `https://calendarsync-auth.home.orangelabs.dev/auth/callback`
    (served through Nginx Proxy Manager; LAN/WireGuard only — never expose
    this publicly. Keep the app **public**: no client secret, PKCE applies.)
 3. Keep the existing desktop `http://localhost` redirect so `sync.py --auth`
