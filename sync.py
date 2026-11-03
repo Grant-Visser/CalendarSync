@@ -376,8 +376,15 @@ def sync_direction(src_name: str, dst_name: str, src_token: str, dst_token: str,
 
 
 def main():
+    global _accounts_cache
     interactive = "--auth" in sys.argv
-    all_cfgs = [PRIMARY_CFG] + CHILDREN_CFG
+    # Bind accounts to real locals: the module-level __getattr__ only serves
+    # attribute access (e.g. `from sync import PRIMARY_CFG`), never bare-name
+    # lookup inside this module — those raise NameError at runtime.
+    if _accounts_cache is None:
+        _accounts_cache = load_accounts()
+    primary_cfg, children_cfg = _accounts_cache
+    all_cfgs = [primary_cfg] + children_cfg
 
     if interactive:
         print("Auth mode — you will be prompted to sign in for each account.\n")
@@ -389,20 +396,20 @@ def main():
         return
     state = load_state()
 
-    primary_name = PRIMARY_CFG["name"]
+    primary_name = primary_cfg["name"]
     primary_token = tokens[primary_name]
 
-    for child in CHILDREN_CFG:
+    for child in children_cfg:
         child_name = child["name"]
         child_token = tokens[child_name]
 
         # Primary → Child: busy blocks only
         sync_direction(primary_name, child_name, primary_token, child_token,
-                       PRIMARY_CFG, child, state, full_details=False)
+                       primary_cfg, child, state, full_details=False)
 
         # Child → Primary: full details
         sync_direction(child_name, primary_name, child_token, primary_token,
-                       child, PRIMARY_CFG, state, full_details=True)
+                       child, primary_cfg, state, full_details=True)
 
     save_state(state)
     print("\nDone.")
